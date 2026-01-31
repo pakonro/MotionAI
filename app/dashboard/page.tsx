@@ -115,14 +115,28 @@ export default function DashboardPage() {
         return
       }
 
-      // Supabase mode
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
-
-      if (!user) {
-        throw new Error('Not authenticated')
+      // Supabase mode - verify session is available
+      if (!supabase) {
+        throw new Error('Supabase client not available')
       }
+
+      // Check session first (reads from cookies)
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        // No session - try to get user (might trigger refresh)
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) {
+          alert('Please sign in first. Redirecting to login...')
+          window.location.href = '/login'
+          return
+        }
+        // User exists but no session - refresh page to establish session
+        alert('Session not available. Refreshing page...')
+        window.location.reload()
+        return
+      }
+
+      const user = session.user
 
       // Upload image to Supabase Storage
       const fileExt = file.name.split('.').pop()
@@ -131,22 +145,120 @@ export default function DashboardPage() {
         .from('input-images')
         .upload(fileName, file)
 
-      if (uploadError) throw uploadError
+      if (uploadError) {
+        console.error('Storage upload error:', uploadError)
+        throw uploadError
+      }
 
       // Get public URL
       const {
         data: { publicUrl },
       } = supabase.storage.from('input-images').getPublicUrl(fileName)
 
-      // Trigger generation
-      await generateVideo(publicUrl)
+      // Check credits client-side (bypasses server action auth issues)
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('credits')
+        .eq('user_id', user.id)
+        .single()
 
-      // Reset form
+      if (profileError || !profile) {
+        throw new Error('Profile not found')
+      }
+
+      if (profile.credits < 1) {
+        alert('Insufficient credits. Please purchase more credits.')
+        return
+      }
+
+      // Deduct 1 credit client-side
+      const { error: creditError } = await supabase
+        .from('profiles')
+        .update({ credits: profile.credits - 1 })
+        .eq('user_id', user.id)
+
+      if (creditError) {
+        throw new Error('Failed to deduct credits')
+      }
+
+      // Create generation record client-side
+      const { data: generation, error: generationError } = await supabase
+        .from('generations')
+        .insert({
+          user_id: user.id,
+          prompt: null,
+          input_image_url: publicUrl,
+          status: 'pending',
+        })
+        .select()
+        .single()
+
+      if (generationError || !generation) {
+        // Refund credit if generation creation fails
+        await supabase
+          .from('profiles')
+          .update({ credits: profile.credits })
+          .eq('user_id', user.id)
+        throw new Error('Failed to create generation record')
+      }
+
+      // Call server action only for WaveSpeedAI API (doesn't need auth)
+      try {
+        const result = await generateVideo(publicUrl, generation.id)
+
+        // Update generation with wavespeed_id client-side so webhook/polling can match it
+        if (result.wavespeedId) {
+          const { error: updateErr } = await supabase
+            .from('generations')
+            .update({ wavespeed_id: result.wavespeedId })
+            .eq('id', generation.id)
+          if (updateErr) {
+            console.error('Failed to save wavespeed_id:', updateErr)
+            alert('Generation started but we could not save the task ID. Check the gallery for status.')
+          }
+        } else {
+          alert('Generation started but no task ID was returned. Check the gallery; status may update via polling.')
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        const isAuthError =
+          errorMessage.includes('Authentication') || errorMessage.includes('Not authenticated')
+        const isConfigError = errorMessage.includes('not configured')
+
+        await supabase
+          .from('generations')
+          .update({
+            status: 'failed',
+            error_message: errorMessage,
+          })
+          .eq('id', generation.id)
+
+        await supabase
+          .from('profiles')
+          .update({ credits: profile.credits })
+          .eq('user_id', user.id)
+
+        if (isAuthError) {
+          alert('Session expired. Refreshing the page may help.')
+          window.location.reload()
+          return
+        }
+        if (isConfigError) {
+          alert('WaveSpeedAI is not configured. Add WAVESPEED_API_KEY to your environment.')
+        } else {
+          alert(`Video generation failed: ${errorMessage}`)
+        }
+        return
+      }
+
+      // Success: reset form and give clear feedback
       setFile(null)
       setPreview(null)
+      alert('Video generation started. Check the gallery for status; it may take a few minutes.')
     } catch (error) {
       console.error('Error generating video:', error)
-      alert('Failed to generate video. Please try again.')
+      const msg = error instanceof Error ? error.message : 'Unknown error'
+      alert(`Failed to generate video: ${msg}`)
     } finally {
       setUploading(false)
     }

@@ -80,7 +80,7 @@ export default function GalleryPage() {
 
     fetchGenerations()
 
-    // Subscribe to generation changes
+    // Subscribe to generation changes (cron or webhook updates rows → Realtime fires → UI updates)
     const channel = supabase
       .channel('generations-changes')
       .on(
@@ -90,8 +90,29 @@ export default function GalleryPage() {
           schema: 'public',
           table: 'generations',
         },
-        () => {
-          fetchGenerations()
+        async (payload) => {
+          const {
+            data: { user },
+          } = await supabase.auth.getUser()
+          if (!user) return
+
+          if (payload.eventType === 'UPDATE' && payload.new && payload.new.user_id === user.id) {
+            setGenerations((prev) =>
+              prev.map((g) =>
+                g.id === (payload.new as Generation).id
+                  ? { ...g, ...(payload.new as Generation) }
+                  : g
+              )
+            )
+            return
+          }
+          if (payload.eventType === 'INSERT' && payload.new && payload.new.user_id === user.id) {
+            fetchGenerations()
+            return
+          }
+          if (payload.eventType === 'DELETE' && payload.old && payload.old.user_id === user.id) {
+            setGenerations((prev) => prev.filter((g) => g.id !== (payload.old as Generation).id))
+          }
         }
       )
       .subscribe()

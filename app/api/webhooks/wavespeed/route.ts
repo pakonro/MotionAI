@@ -1,37 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { createWaveSpeedService } from '@/lib/wavespeed/service'
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
+    console.log('WaveSpeedAI webhook received:', JSON.stringify(body, null, 2))
 
-    // WaveSpeedAI webhook payload structure (adjust based on actual API)
-    const {
-      generation_id,
-      status,
-      video_url,
-      error_message,
-    }: {
-      generation_id: string
-      status: 'completed' | 'failed'
-      video_url?: string
-      error_message?: string
-    } = body
+    const service = createWaveSpeedService()
+    const parsed = service?.parseWebhookPayload(body)
 
-    if (!generation_id) {
+    if (!parsed) {
+      console.error('Invalid or missing wavespeed ID in webhook payload:', body)
       return NextResponse.json(
-        { error: 'Missing generation_id' },
+        { error: 'Missing generation ID' },
         { status: 400 }
       )
     }
 
+    const { wavespeedId, status, videoUrl, errorMessage } = parsed
+
     const supabase = await createClient()
+
+    if (!supabase) {
+      return NextResponse.json(
+        { error: 'Failed to initialize Supabase' },
+        { status: 500 }
+      )
+    }
 
     // Find the generation by wavespeed_id
     const { data: generation, error: fetchError } = await supabase
       .from('generations')
       .select('*')
-      .eq('wavespeed_id', generation_id)
+      .eq('wavespeed_id', wavespeedId)
       .single()
 
     if (fetchError || !generation) {
@@ -43,12 +45,12 @@ export async function POST(request: NextRequest) {
     }
 
     // If video is completed, download and store in Supabase Storage
-    let finalVideoUrl = video_url
+    let finalVideoUrl = videoUrl
 
-    if (status === 'completed' && video_url) {
+    if ((status === 'completed' || status === 'success') && videoUrl) {
       try {
         // Download video from WaveSpeedAI
-        const videoResponse = await fetch(video_url)
+        const videoResponse = await fetch(videoUrl)
         if (!videoResponse.ok) {
           throw new Error('Failed to download video')
         }
@@ -81,13 +83,16 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Determine final status
+    const finalStatus = (status === 'completed' || status === 'success') ? 'completed' : 'failed'
+
     // Update the generation record
     const { error: updateError } = await supabase
       .from('generations')
       .update({
-        status: status === 'completed' ? 'completed' : 'failed',
+        status: finalStatus,
         output_video_url: finalVideoUrl || null,
-        error_message: error_message || null,
+        error_message: errorMessage || null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', generation.id)
