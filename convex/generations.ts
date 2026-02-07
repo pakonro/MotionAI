@@ -171,23 +171,22 @@ export const pollPending = internalAction({
           })
           continue
         }
-        const data = (await res.json()) as {
-          data?: {
-            status?: string
-            outputs?: Array<{ url?: string }>
-            error?: string
-          }
-        }
-        console.log('Cron Polling Result:', JSON.stringify(data).slice(0, 500))
-        const d = data.data
+        const data = (await res.json()) as Record<string, unknown>
+        console.log('Cron Polling Result:', JSON.stringify(data))
+        const d = data.data as Record<string, unknown> | undefined
         if (!d) continue
-        const status = (d.status ?? '').toLowerCase()
+        const status = ((d.status as string) ?? '').toLowerCase()
         const isComplete = status === 'completed' || status === 'succeeded' || status === 'success'
         const isFailed = status === 'failed' || status === 'error'
         if (!isComplete && !isFailed) continue
         let outputVideoUrl: string | undefined
-        if (isComplete && d.outputs?.length) {
-          outputVideoUrl = d.outputs[0]?.url ?? undefined
+        if (isComplete) {
+          const outputs = d.outputs as (string | { url?: string })[] | undefined
+          outputVideoUrl =
+            (typeof outputs?.[0] === 'string' ? outputs[0] : outputs?.[0]?.url) ??
+            (d.url as string | undefined) ??
+            (d.video_url as string | undefined) ??
+            (data.url as string | undefined)
         }
         await ctx.runMutation((internal as any).generations.updateFromPoll, {
           id: row._id,
