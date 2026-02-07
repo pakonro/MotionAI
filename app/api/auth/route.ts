@@ -21,6 +21,12 @@ async function getProxy() {
 export async function POST(request: NextRequest) {
   try {
     const proxyAuthActionToConvex = await getProxy()
+    if (!proxyAuthActionToConvex) {
+      return new Response(JSON.stringify({ error: 'Auth proxy failed to load' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
     const response = await proxyAuthActionToConvex(request, {})
     // Ensure we never return an empty body (client always calls response.json())
     const cloned = response.clone()

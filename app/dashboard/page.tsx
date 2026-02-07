@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { useQuery, useMutation, useConvexAuth } from 'convex/react'
 import { api } from '@/convex/_generated/api'
+import type { Id } from '@/convex/_generated/dataModel'
 import { Upload, Loader2, AlertCircle } from 'lucide-react'
 import { generateVideo } from '@/app/actions/generate-video'
 import { TestCreditsButton } from '@/components/test-credits-button'
@@ -146,7 +147,10 @@ export default function DashboardPage() {
       let id: string
       let inputImageUrl: string
       try {
-        const saved = await Promise.race([saveInputImage({ storageId }), timeout(GENERATE_TIMEOUT_MS)])
+        const saved = await Promise.race([
+          saveInputImage({ storageId: storageId as Id<'_storage'> }),
+          timeout(GENERATE_TIMEOUT_MS),
+        ])
         id = saved?.id
         inputImageUrl = saved?.inputImageUrl
         if (!id || !inputImageUrl) {
@@ -165,13 +169,13 @@ export default function DashboardPage() {
           timeout(GENERATE_TIMEOUT_MS),
         ])
         if (waveResult.wavespeedId) {
-          await updateWavespeedId({ id, wavespeedId: waveResult.wavespeedId })
+          await updateWavespeedId({ id: id as Id<'generations'>, wavespeedId: waveResult.wavespeedId })
         } else {
           alert('Generation started but no task ID returned. Check the gallery for status.')
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-        await markFailed({ id, errorMessage })
+        await markFailed({ id: id as Id<'generations'>, errorMessage })
         await refundCredit()
         if (errorMessage.includes('not configured')) {
           alert('WaveSpeedAI is not configured. Add WAVESPEED_API_KEY to your environment.')
