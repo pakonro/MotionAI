@@ -1,105 +1,48 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { createClient, isSupabaseConfigured } from '@/lib/supabase/client'
-import { Database } from '@/types/database.types'
-import { Loader2, Play, AlertCircle } from 'lucide-react'
+import { useQuery } from 'convex/react'
+import { api } from '@/convex/_generated/api'
+import { Loader2, AlertCircle } from 'lucide-react'
 import Link from 'next/link'
 import { getDemoData } from '@/lib/demo-mode'
-
-type Generation =
-  Database['public']['Tables']['generations']['Row']
+import { isConvexConfigured } from '@/lib/convex'
+import { useEffect, useState } from 'react'
 
 export default function GalleryPage() {
-  const [generations, setGenerations] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [isDemoMode, setIsDemoMode] = useState(false)
-  const supabase = createClient()
+  const generationsFromConvex = useQuery(api.generations.list)
+  const [demoGenerations, setDemoGenerations] = useState<ReturnType<typeof getDemoData>['generations']>([])
+  const [isDemoMode, setIsDemoMode] = useState(!isConvexConfigured())
 
   useEffect(() => {
-    const configured = isSupabaseConfigured()
-    setIsDemoMode(!configured)
+    setIsDemoMode(!isConvexConfigured())
+  }, [])
 
-    if (!configured) {
-      // Demo mode - use localStorage
-      const data = getDemoData()
-      setGenerations(data.generations)
-      setLoading(false)
-
-      // Listen for storage changes
-      const handleStorageChange = () => {
-        const updatedData = getDemoData()
-        setGenerations(updatedData.generations)
-      }
+  useEffect(() => {
+    if (isDemoMode) {
+      setDemoGenerations(getDemoData().generations)
+      const handleStorageChange = () => setDemoGenerations(getDemoData().generations)
       window.addEventListener('storage', handleStorageChange)
-      const interval = setInterval(() => {
-        const updatedData = getDemoData()
-        setGenerations(updatedData.generations)
-      }, 1000)
-
+      const interval = setInterval(() => setDemoGenerations(getDemoData().generations), 1000)
       return () => {
         window.removeEventListener('storage', handleStorageChange)
         clearInterval(interval)
       }
     }
+  }, [isDemoMode])
 
-    // Supabase mode
-    if (!supabase) {
-      setLoading(false)
-      return
-    }
+  const generations = isDemoMode
+    ? demoGenerations.map((g) => ({
+        _id: g.id as any,
+        status: g.status,
+        outputVideoUrl: g.output_video_url,
+        inputImageUrl: g.input_image_url,
+        prompt: g.prompt,
+        createdAt: new Date(g.created_at).getTime(),
+        errorMessage: null,
+      }))
+    : generationsFromConvex ?? []
 
-    const fetchGenerations = async () => {
-      try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser()
-
-        if (!user) {
-          setLoading(false)
-          return
-        }
-
-        const { data, error } = await supabase
-          .from('generations')
-          .select('*')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false })
-
-        if (error) {
-          console.error('Error fetching generations:', error)
-        } else {
-          setGenerations(data || [])
-        }
-      } catch (error) {
-        console.error('Error:', error)
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    fetchGenerations()
-
-    // Subscribe to generation changes
-    const channel = supabase
-      .channel('generations-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'generations',
-        },
-        () => {
-          fetchGenerations()
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [supabase])
+  const loading = !isDemoMode && generationsFromConvex === undefined
 
   if (loading) {
     return (
@@ -133,22 +76,28 @@ export default function GalleryPage() {
     <div className="max-w-6xl mx-auto">
       <h1 className="text-3xl font-bold mb-2">Generation Gallery</h1>
       <p className="text-muted-foreground mb-6">
-        All your generated videos
+        All your generated videos. Status updates automatically (Convex realtime); no refresh needed.
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {generations.map((generation) => (
+        {generations.map((generation: { _id: string; status: string; outputVideoUrl?: string | null; prompt?: string | null; createdAt: number; errorMessage?: string | null }) => (
           <div
-            key={generation.id}
+            key={generation._id}
             className="border border-border rounded-lg overflow-hidden bg-card"
           >
             <div className="aspect-video bg-muted relative">
-              {generation.status === 'completed' &&
-              generation.output_video_url ? (
+              {generation.status === 'completed' && generation.outputVideoUrl ? (
                 <video
-                  src={generation.output_video_url}
+                  src={generation.outputVideoUrl}
                   controls
                   className="w-full h-full object-cover"
                 />
+              ) : generation.status === 'completed' && !generation.outputVideoUrl ? (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center text-blue-500">
+                    <Loader2 className="w-8 h-8 animate-spin inline mb-2 text-muted-foreground" />
+                    <p className="text-sm">Finalizing...</p>
+                  </div>
+                </div>
               ) : generation.status === 'pending' ? (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-center">
@@ -179,7 +128,7 @@ export default function GalleryPage() {
                   {generation.status}
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  {new Date(generation.created_at).toLocaleDateString()}
+                  {new Date(generation.createdAt).toLocaleDateString()}
                 </span>
               </div>
               {generation.prompt && (

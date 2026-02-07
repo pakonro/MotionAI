@@ -1,101 +1,32 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { createClient, isSupabaseConfigured } from '@/lib/supabase/client'
+import { useQuery } from 'convex/react'
+import { api } from '@/convex/_generated/api'
 import { CreditCard } from 'lucide-react'
 import { getDemoData } from '@/lib/demo-mode'
-// import { BuyCreditsButton } from '@/components/buy-credits-button' // Stripe integration - commented out for now
+import { isConvexConfigured } from '@/lib/convex'
+import { useEffect, useState } from 'react'
 
 export function Header() {
-  const [credits, setCredits] = useState<number | null>(null)
-  const [supabase, setSupabase] = useState<ReturnType<typeof createClient> | null>(null)
-  const [isDemoMode, setIsDemoMode] = useState(false)
+  const creditsFromConvex = useQuery(api.profiles.getCredits)
+  const [demoCredits, setDemoCredits] = useState<number | null>(null)
+  const isDemoMode = !isConvexConfigured()
 
   useEffect(() => {
-    const configured = isSupabaseConfigured()
-    setIsDemoMode(!configured)
-
-    if (!configured) {
-      // Demo mode - use localStorage
-      const data = getDemoData()
-      setCredits(data.credits)
-      
-      // Listen for storage changes (for demo mode)
-      const handleStorageChange = () => {
-        const updatedData = getDemoData()
-        setCredits(updatedData.credits)
-      }
+    if (isDemoMode) {
+      setDemoCredits(getDemoData().credits)
+      const handleStorageChange = () => setDemoCredits(getDemoData().credits)
       window.addEventListener('storage', handleStorageChange)
-      // Also check periodically for same-tab updates
-      const interval = setInterval(() => {
-        const updatedData = getDemoData()
-        setCredits(updatedData.credits)
-      }, 1000)
-
+      const interval = setInterval(() => setDemoCredits(getDemoData().credits), 1000)
       return () => {
         window.removeEventListener('storage', handleStorageChange)
         clearInterval(interval)
       }
     }
+  }, [isDemoMode])
 
-    // Supabase mode
-    try {
-      const client = createClient()
-      if (client) {
-        setSupabase(client)
-      }
-    } catch (error) {
-      console.error('Failed to initialize Supabase:', error)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!supabase || isDemoMode) return
-
-    const fetchCredits = async () => {
-      try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser()
-        if (user) {
-          const { data } = await supabase
-            .from('profiles')
-            .select('credits')
-            .eq('user_id', user.id)
-            .single()
-          if (data) {
-            setCredits(data.credits)
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching credits:', error)
-      }
-    }
-
-    fetchCredits()
-
-    // Subscribe to profile changes
-    const channel = supabase
-      .channel('profile-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'profiles',
-        },
-        (payload) => {
-          if (payload.new.credits !== undefined) {
-            setCredits(payload.new.credits as number)
-          }
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [supabase, isDemoMode])
+  const credits = isDemoMode ? demoCredits : creditsFromConvex
+  const displayCredits = credits !== null && credits !== undefined ? credits : '...'
 
   return (
     <header className="h-16 border-b border-border flex items-center justify-between px-6 bg-card">
@@ -105,12 +36,8 @@ export function Header() {
       <div className="flex items-center gap-4">
         <div className="flex items-center gap-2 px-4 py-2 bg-accent rounded-lg">
           <CreditCard className="w-4 h-4" />
-          <span className="font-medium">
-            {credits !== null ? credits : '...'} Credits
-          </span>
+          <span className="font-medium">{displayCredits} Credits</span>
         </div>
-        {/* Stripe integration - commented out for now */}
-        {/* <BuyCreditsButton /> */}
       </div>
     </header>
   )

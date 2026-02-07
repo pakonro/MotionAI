@@ -8,9 +8,8 @@ export function ErrorBoundary({ error }: { error: Error }) {
   }, [error])
 
   const isConfigError =
-    error.message.includes('NEXT_PUBLIC_SUPABASE_URL') ||
-    error.message.includes('NEXT_PUBLIC_SUPABASE_ANON_KEY') ||
-    error.message.includes('Invalid supabaseUrl')
+    error.message.includes('NEXT_PUBLIC_CONVEX_URL') ||
+    error.message.includes('Invalid Convex URL')
 
   if (isConfigError) {
     return (
@@ -20,24 +19,16 @@ export function ErrorBoundary({ error }: { error: Error }) {
             Configuration Error
           </h1>
           <p className="text-muted-foreground mb-4">
-            Your Supabase environment variables are not configured correctly.
+            Convex is not configured. Set NEXT_PUBLIC_CONVEX_URL in your environment.
           </p>
           <div className="bg-muted p-4 rounded-lg mb-4">
             <p className="text-sm font-mono mb-2">
-              Please update your <code className="bg-background px-2 py-1 rounded">.env.local</code> file with:
+              Run <code className="bg-background px-2 py-1 rounded">npx convex dev</code> (Node 20+) to get your deployment URL, then add to <code className="bg-background px-2 py-1 rounded">.env.local</code>:
             </p>
             <pre className="text-xs overflow-x-auto">
-              {`NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key`}
+              {`NEXT_PUBLIC_CONVEX_URL=https://your-deployment.convex.cloud`}
             </pre>
           </div>
-          <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
-            <li>Create a Supabase project at https://supabase.com</li>
-            <li>Go to Project Settings → API</li>
-            <li>Copy the Project URL and anon/public key</li>
-            <li>Add them to your <code className="bg-muted px-1 rounded">.env.local</code> file</li>
-            <li>Restart your development server</li>
-          </ol>
         </div>
       </div>
     )

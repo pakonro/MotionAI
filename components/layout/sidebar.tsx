@@ -2,35 +2,24 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { createClient, isSupabaseConfigured } from '@/lib/supabase/client'
-import { useRouter } from 'next/navigation'
+import { useAuthActions } from '@convex-dev/auth/react'
 import { Home, Video, LogOut } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { isConvexConfigured } from '@/lib/convex'
 
 export function Sidebar() {
   const pathname = usePathname()
-  const router = useRouter()
-  const [supabase, setSupabase] = useState<ReturnType<typeof createClient> | null>(null)
-  const [isDemoMode, setIsDemoMode] = useState(false)
-
-  useEffect(() => {
-    const configured = isSupabaseConfigured()
-    setIsDemoMode(!configured)
-    
-    if (configured) {
-      try {
-        setSupabase(createClient())
-      } catch (error) {
-        console.error('Failed to initialize Supabase:', error)
-      }
-    }
-  }, [])
+  const { signOut } = useAuthActions()
+  const isDemoMode = !isConvexConfigured()
 
   const handleSignOut = async () => {
-    if (supabase) {
-      await supabase.auth.signOut()
-      router.push('/login')
+    if (!isConvexConfigured()) return
+    try {
+      await signOut()
+    } catch {
+      // Ignore: invalidateCache can throw when run from client.
     }
+    // Full page reload clears Convex client state and avoids invalidateCache race (Gemini).
+    window.location.href = '/login'
   }
 
   const navItems = [
