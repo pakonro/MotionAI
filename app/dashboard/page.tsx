@@ -2,54 +2,38 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { createClient, isSupabaseConfigured } from '@/lib/supabase/client'
+import { useQuery, useMutation, useConvexAuth } from 'convex/react'
+import { api } from '@/convex/_generated/api'
 import { Upload, Loader2, AlertCircle } from 'lucide-react'
 import { generateVideo } from '@/app/actions/generate-video'
 import { TestCreditsButton } from '@/components/test-credits-button'
 import { deductDemoCredits, getDemoData, addDemoGeneration } from '@/lib/demo-mode'
+import { isConvexConfigured } from '@/lib/convex'
 
 export default function DashboardPage() {
+  const { isLoading: authLoading, isAuthenticated } = useConvexAuth()
   const [uploading, setUploading] = useState(false)
   const [preview, setPreview] = useState<string | null>(null)
   const [file, setFile] = useState<File | null>(null)
-  const [isDemoMode, setIsDemoMode] = useState(false)
-  const [sessionReady, setSessionReady] = useState(false)
-  const supabase = createClient()
+  const [isDemoMode, setIsDemoMode] = useState(!isConvexConfigured())
+  const credits = useQuery(api.profiles.getCredits)
+  const ensureProfile = useMutation(api.profiles.ensureProfile)
+  const deductCredit = useMutation(api.profiles.deductCredit)
+  const refundCredit = useMutation(api.profiles.refundCredit)
+  const generateUploadUrl = useMutation(api.files.generateUploadUrl)
+  const saveInputImage = useMutation(api.files.saveInputImage)
+  const updateWavespeedId = useMutation(api.generations.updateWavespeedId)
+  const markFailed = useMutation(api.generations.markFailed)
 
   useEffect(() => {
-    const checkSession = async () => {
-      setIsDemoMode(!isSupabaseConfigured())
-      
-      // If Supabase is configured, verify session is ready
-      if (isSupabaseConfigured() && supabase) {
-        try {
-          const { data: { session } } = await supabase.auth.getSession()
-          if (session) {
-            setSessionReady(true)
-          } else {
-            // Wait a bit and check again (cookies might still be setting)
-            setTimeout(async () => {
-              const { data: { session: retrySession } } = await supabase.auth.getSession()
-              if (retrySession) {
-                setSessionReady(true)
-              } else {
-                // If still no session after retry, refresh the page
-                console.warn('Session not available, refreshing page...')
-                window.location.reload()
-              }
-            }, 1000)
-          }
-        } catch (error) {
-          console.error('Error checking session:', error)
-        }
-      } else {
-        // Demo mode - no session needed
-        setSessionReady(true)
-      }
+    setIsDemoMode(!isConvexConfigured())
+  }, [])
+
+  useEffect(() => {
+    if (isConvexConfigured() && !authLoading && isAuthenticated && ensureProfile) {
+      ensureProfile().catch(() => {})
     }
-    
-    checkSession()
-  }, [supabase])
+  }, [isConvexConfigured(), authLoading, isAuthenticated, ensureProfile])
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const selectedFile = acceptedFiles[0]
@@ -71,27 +55,30 @@ export default function DashboardPage() {
     maxFiles: 1,
   })
 
+  const GENERATE_TIMEOUT_MS = 90_000 // 90s so upload + save + WaveSpeed call can complete
+
   const handleGenerate = async () => {
     if (!file) return
+    if (!isDemoMode && (!isAuthenticated || authLoading)) {
+      alert('Please wait for sign-in to complete, or sign in again.')
+      return
+    }
 
     setUploading(true)
     try {
-      if (isDemoMode || !supabase) {
-        // Demo mode - check credits and create mock generation
+      const timeout = (ms: number) =>
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Request timed out. Check your connection and try again.')), ms)
+        )
+      if (isDemoMode) {
         const data = getDemoData()
         if (data.credits < 1) {
           alert('Insufficient credits. Use "Add Test Credits" button.')
           setUploading(false)
           return
         }
-
-        // Deduct credit
         deductDemoCredits(1)
-
-        // Create object URL for the image
         const imageUrl = URL.createObjectURL(file)
-
-        // Create mock generation
         const generationId = `demo-${Date.now()}`
         addDemoGeneration({
           id: generationId,
@@ -101,167 +88,125 @@ export default function DashboardPage() {
           status: 'pending',
           created_at: new Date().toISOString(),
         })
-
-        // In demo mode, we can't actually call WaveSpeedAI, so show a message
         alert(
-          'Demo mode: Video generation would be triggered here. In production, this would call WaveSpeedAI API. Check the gallery to see your generation.'
+          'Demo mode: Video generation would be triggered here. Configure Convex to enable full functionality.'
         )
-
-        // Reset form
         setFile(null)
         setPreview(null)
-        // Refresh page to update credits
         window.location.reload()
         return
       }
 
-      // Supabase mode - verify session is available
-      if (!supabase) {
-        throw new Error('Supabase client not available')
-      }
-
-      // Check session first (reads from cookies)
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) {
-        // No session - try to get user (might trigger refresh)
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
-          alert('Please sign in first. Redirecting to login...')
-          window.location.href = '/login'
-          return
-        }
-        // User exists but no session - refresh page to establish session
-        alert('Session not available. Refreshing page...')
-        window.location.reload()
-        return
-      }
-
-      const user = session.user
-
-      // Upload image to Supabase Storage
-      const fileExt = file.name.split('.').pop()
-      const fileName = `${user.id}/${Date.now()}.${fileExt}`
-      const { error: uploadError } = await supabase.storage
-        .from('input-images')
-        .upload(fileName, file)
-
-      if (uploadError) {
-        console.error('Storage upload error:', uploadError)
-        throw uploadError
-      }
-
-      // Get public URL
-      const {
-        data: { publicUrl },
-      } = supabase.storage.from('input-images').getPublicUrl(fileName)
-
-      // Check credits client-side (bypasses server action auth issues)
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('credits')
-        .eq('user_id', user.id)
-        .single()
-
-      if (profileError || !profile) {
-        throw new Error('Profile not found')
-      }
-
-      if (profile.credits < 1) {
+      if (credits != null && credits < 1) {
         alert('Insufficient credits. Please purchase more credits.')
+        setUploading(false)
         return
       }
 
-      // Deduct 1 credit client-side
-      const { error: creditError } = await supabase
-        .from('profiles')
-        .update({ credits: profile.credits - 1 })
-        .eq('user_id', user.id)
-
-      if (creditError) {
-        throw new Error('Failed to deduct credits')
-      }
-
-      // Create generation record client-side
-      const { data: generation, error: generationError } = await supabase
-        .from('generations')
-        .insert({
-          user_id: user.id,
-          prompt: null,
-          input_image_url: publicUrl,
-          status: 'pending',
-        })
-        .select()
-        .single()
-
-      if (generationError || !generation) {
-        // Refund credit if generation creation fails
-        await supabase
-          .from('profiles')
-          .update({ credits: profile.credits })
-          .eq('user_id', user.id)
-        throw new Error('Failed to create generation record')
-      }
-
-      // Call server action only for WaveSpeedAI API (doesn't need auth)
+      await Promise.race([deductCredit(), timeout(GENERATE_TIMEOUT_MS)])
+      let uploadUrl: string
       try {
-        const result = await generateVideo(publicUrl, generation.id)
+        uploadUrl = await Promise.race([generateUploadUrl(), timeout(GENERATE_TIMEOUT_MS)])
+      } catch (e) {
+        console.error('generateUploadUrl failed', e)
+        await refundCredit().catch(() => {})
+        throw new Error('Failed to get upload URL. Check console.')
+      }
+      if (!uploadUrl || typeof uploadUrl !== 'string') {
+        await refundCredit().catch(() => {})
+        throw new Error('Upload URL was empty.')
+      }
 
-        // Update generation with wavespeed_id client-side so webhook/polling can match it
-        if (result.wavespeedId) {
-          const { error: updateErr } = await supabase
-            .from('generations')
-            .update({ wavespeed_id: result.wavespeedId })
-            .eq('id', generation.id)
-          if (updateErr) {
-            console.error('Failed to save wavespeed_id:', updateErr)
-            alert('Generation started but we could not save the task ID. Check the gallery for status.')
-          }
+      let storageId: string
+      try {
+        const result = await Promise.race([
+          fetch(uploadUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': file.type },
+            body: file,
+          }),
+          timeout(GENERATE_TIMEOUT_MS),
+        ])
+        if (!result.ok) {
+          await refundCredit()
+          throw new Error(`Upload failed: ${result.status} ${result.statusText}`)
+        }
+        const data = await result.json()
+        storageId = data?.storageId ?? data?.storage_id
+        if (!storageId) {
+          await refundCredit()
+          throw new Error('Upload response missing storageId.')
+        }
+      } catch (e) {
+        console.error('Upload to storage failed', e)
+        await refundCredit().catch(() => {})
+        throw e instanceof Error ? e : new Error('Upload failed.')
+      }
+
+      let id: string
+      let inputImageUrl: string
+      try {
+        const saved = await Promise.race([saveInputImage({ storageId }), timeout(GENERATE_TIMEOUT_MS)])
+        id = saved?.id
+        inputImageUrl = saved?.inputImageUrl
+        if (!id || !inputImageUrl) {
+          await refundCredit()
+          throw new Error('Save image failed: missing id or URL.')
+        }
+      } catch (e) {
+        console.error('saveInputImage failed', e)
+        await refundCredit().catch(() => {})
+        throw e instanceof Error ? e : new Error('Saving image failed.')
+      }
+
+      try {
+        const waveResult = await Promise.race([
+          generateVideo(inputImageUrl, id),
+          timeout(GENERATE_TIMEOUT_MS),
+        ])
+        if (waveResult.wavespeedId) {
+          await updateWavespeedId({ id, wavespeedId: waveResult.wavespeedId })
         } else {
-          alert('Generation started but no task ID was returned. Check the gallery; status may update via polling.')
+          alert('Generation started but no task ID returned. Check the gallery for status.')
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-        const isAuthError =
-          errorMessage.includes('Authentication') || errorMessage.includes('Not authenticated')
-        const isConfigError = errorMessage.includes('not configured')
-
-        await supabase
-          .from('generations')
-          .update({
-            status: 'failed',
-            error_message: errorMessage,
-          })
-          .eq('id', generation.id)
-
-        await supabase
-          .from('profiles')
-          .update({ credits: profile.credits })
-          .eq('user_id', user.id)
-
-        if (isAuthError) {
-          alert('Session expired. Refreshing the page may help.')
-          window.location.reload()
-          return
-        }
-        if (isConfigError) {
+        await markFailed({ id, errorMessage })
+        await refundCredit()
+        if (errorMessage.includes('not configured')) {
           alert('WaveSpeedAI is not configured. Add WAVESPEED_API_KEY to your environment.')
         } else {
           alert(`Video generation failed: ${errorMessage}`)
         }
+        setUploading(false)
         return
       }
 
-      // Success: reset form and give clear feedback
       setFile(null)
       setPreview(null)
       alert('Video generation started. Check the gallery for status; it may take a few minutes.')
     } catch (error) {
       console.error('Error generating video:', error)
-      const msg = error instanceof Error ? error.message : 'Unknown error'
+      const msg =
+        error instanceof Error
+          ? error.message
+          : typeof error === 'object' && error !== null && 'message' in error
+            ? String((error as { message: unknown }).message)
+            : 'Unknown error'
+      if (!isDemoMode) await refundCredit().catch(() => {})
       alert(`Failed to generate video: ${msg}`)
     } finally {
       setUploading(false)
     }
+  }
+
+  if (!isDemoMode && authLoading) {
+    return (
+      <div className="max-w-4xl mx-auto flex items-center justify-center py-12">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+        <span className="ml-2 text-muted-foreground">Loading...</span>
+      </div>
+    )
   }
 
   return (
@@ -272,8 +217,7 @@ export default function DashboardPage() {
           <div className="flex-1">
             <p className="font-medium text-yellow-500 mb-1">Demo Mode</p>
             <p className="text-sm text-muted-foreground">
-              Supabase is not configured. Running in demo mode with localStorage.
-              Configure Supabase to enable full functionality.
+              Convex is not configured. Set NEXT_PUBLIC_CONVEX_URL to enable full functionality.
             </p>
           </div>
         </div>
@@ -320,7 +264,7 @@ export default function DashboardPage() {
                   e.stopPropagation()
                   handleGenerate()
                 }}
-                disabled={uploading}
+                disabled={uploading || (!isDemoMode && !isAuthenticated)}
                 className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
               >
                 {uploading ? (

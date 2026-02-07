@@ -1,8 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { createClient, isSupabaseConfigured } from '@/lib/supabase/client'
-import { useRouter } from 'next/navigation'
+import { useState } from 'react'
+import { useAuthActions } from '@convex-dev/auth/react'
 import Link from 'next/link'
 import { Loader2 } from 'lucide-react'
 
@@ -11,50 +10,33 @@ export default function SignupPage() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [supabase, setSupabase] = useState<ReturnType<typeof createClient> | null>(null)
-  const router = useRouter()
-
-  useEffect(() => {
-    if (isSupabaseConfigured()) {
-      try {
-        setSupabase(createClient())
-      } catch (err) {
-        setError('Failed to initialize Supabase. Please check your configuration.')
-      }
-    } else {
-      setError('Supabase is not configured. Please set up your environment variables.')
-    }
-  }, [])
+  const { signIn } = useAuthActions()
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault()
-    
-    if (!supabase) {
-      setError('Supabase client is not initialized. Please refresh the page.')
-      return
-    }
-
     setLoading(true)
     setError(null)
-
     try {
-      const { data, error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
-        },
-      })
-
-      if (signUpError) {
-        setError(signUpError.message)
-        setLoading(false)
-      } else {
-        // Check if email confirmation is required
-        router.push('/login?message=Check your email to confirm your account')
-      }
+      const formData = new FormData()
+      formData.set('email', email)
+      formData.set('password', password)
+      formData.set('flow', 'signUp')
+      await signIn('password', formData)
+      window.location.href = '/dashboard'
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred')
+      const message = err instanceof Error ? err.message : 'Sign up failed'
+      if (message.includes('already exists') || (message.includes('Account') && message.includes('exists'))) {
+        setError('An account with this email already exists. Try signing in.')
+      } else if (message.includes('Invalid password') || message.includes('password')) {
+        setError('Please use a stronger password (at least 6 characters).')
+      } else if (message.includes('Missing environment') || message.includes('CONVEX_SITE_URL')) {
+        setError('Server is misconfigured. Please set CONVEX_SITE_URL in your Convex dashboard environment variables.')
+      } else if (message.includes('Missing') && message.includes('password')) {
+        setError('Please enter a password (at least 6 characters).')
+      } else {
+        setError(message)
+      }
+    } finally {
       setLoading(false)
     }
   }
@@ -69,20 +51,23 @@ export default function SignupPage() {
 
         {error && (
           <div className="mb-4 p-3 bg-destructive/10 text-destructive rounded-lg text-sm">
-            {error}
+            <p>{error}</p>
+            {error.includes('signing in') && (
+              <Link href="/login" className="mt-2 inline-block font-medium underline hover:no-underline">
+                Go to Sign in
+              </Link>
+            )}
           </div>
         )}
 
         <form onSubmit={handleSignup} className="space-y-4">
           <div>
-            <label
-              htmlFor="email"
-              className="block text-sm font-medium mb-2"
-            >
+            <label htmlFor="email" className="block text-sm font-medium mb-2">
               Email
             </label>
             <input
               id="email"
+              name="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -92,14 +77,12 @@ export default function SignupPage() {
             />
           </div>
           <div>
-            <label
-              htmlFor="password"
-              className="block text-sm font-medium mb-2"
-            >
+            <label htmlFor="password" className="block text-sm font-medium mb-2">
               Password
             </label>
             <input
               id="password"
+              name="password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -111,7 +94,7 @@ export default function SignupPage() {
           </div>
           <button
             type="submit"
-            disabled={loading || !supabase}
+            disabled={loading}
             className="w-full px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {loading ? (

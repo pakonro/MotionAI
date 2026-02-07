@@ -6,9 +6,9 @@ An AI SaaS platform that generates videos from images using the WaveSpeedAI API.
 
 - **Framework**: Next.js 14 (App Router) with TypeScript
 - **Styling**: Tailwind CSS + Shadcn UI
-- **Database & Auth**: Supabase (PostgreSQL + Supabase Auth) - *Optional - app works in demo mode without it*
+- **Database & Auth**: Convex (reactive backend + Convex Auth) - *Optional - app works in demo mode without it*
 - **Payments**: Stripe (Credit-based system) - *Currently disabled, will be integrated later*
-- **File Storage**: Supabase Storage - *Optional - uses localStorage in demo mode*
+- **File Storage**: Convex file storage - *Optional - uses localStorage in demo mode*
 
 ## Setup Instructions
 
@@ -17,9 +17,8 @@ An AI SaaS platform that generates videos from images using the WaveSpeedAI API.
 Create a `.env.local` file in the root directory:
 
 ```env
-# Supabase (Optional - app works in demo mode without it)
-# NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
-# NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+# Convex (Optional - app works in demo mode without it)
+# NEXT_PUBLIC_CONVEX_URL=https://your-deployment.convex.cloud
 
 # Stripe (Optional - currently disabled)
 # STRIPE_SECRET_KEY=your_stripe_secret_key
@@ -43,17 +42,14 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 4. Use the "Add Test Credits" button to add credits
 5. Upload images and test the video generation flow
 
-### 3. Supabase Setup (Optional - For Production)
+### 3. Convex Setup (Optional - For Production)
 
 To enable full functionality with authentication and database:
 
-1. Create a new Supabase project at https://supabase.com
-2. Run the migration file `supabase/migrations/001_initial_schema.sql` in your Supabase SQL editor
-3. Create two storage buckets:
-   - `input-images` (public)
-   - `generated-videos` (public)
-4. Add your Supabase credentials to `.env.local`
-5. Restart the development server
+1. Install Convex CLI and create a deployment: `npx convex dev` (Node 20+ required)
+2. Convex will create `convex/` and add `NEXT_PUBLIC_CONVEX_URL` to `.env.local`
+3. Auth and file storage are built in; no separate buckets needed
+4. Point WaveSpeed webhook to your Convex HTTP URL: `https://<deployment>.convex.site/wavespeed`
 
 ### 4. Stripe Setup (Optional - Currently Disabled)
 
@@ -61,14 +57,9 @@ To enable full functionality with authentication and database:
 
 1. Create a Stripe account at https://stripe.com
 2. Get your API keys from the Stripe Dashboard
-3. Uncomment Stripe-related code in:
-   - `lib/stripe.ts`
-   - `app/actions/create-checkout.ts`
-   - `app/api/webhooks/stripe/route.ts`
-   - `components/buy-credits-button.tsx`
-   - `components/layout/header.tsx`
-4. Set up a webhook endpoint pointing to `/api/webhooks/stripe`
-5. Configure the webhook to listen for `checkout.session.completed` events
+3. Implement Stripe in Convex: `convex/http.ts` (POST /stripe), `internal.profiles.addCredits`, and checkout creation in an action or mutation
+4. Update `app/actions/create-checkout.ts` and `components/buy-credits-button.tsx` to call Convex
+5. Point Stripe webhook to your Convex HTTP URL: `https://<deployment>.convex.site/stripe`
 
 ### 5. Install Dependencies
 
@@ -90,26 +81,25 @@ Visit http://localhost:3000
 ├── app/
 │   ├── actions/          # Server actions
 │   ├── api/
-│   │   └── webhooks/     # Webhook endpoints
+│   │   └── webhooks/     # Webhook endpoints (e.g. Stripe)
 │   ├── auth/             # Auth callback routes
 │   ├── dashboard/        # Dashboard page
 │   ├── gallery/          # Gallery page
 │   └── login/            # Login page
 ├── components/
 │   └── layout/           # Layout components
+├── convex/               # Convex backend (schema, queries, mutations, HTTP, crons)
 ├── lib/
-│   ├── supabase/         # Supabase client utilities
+│   ├── convex.ts         # Convex env check (isConvexConfigured)
+│   ├── demo-mode.ts      # localStorage demo mode
 │   └── stripe.ts         # Stripe client
-├── supabase/
-│   └── migrations/       # Database migrations
-└── types/
-    └── database.types.ts # Database TypeScript types
+└── types/                # (Convex types from convex/_generated when using npx convex codegen)
 ```
 
 ## Features
 
-- ✅ Demo mode - works without Supabase or Stripe setup
-- ✅ User authentication (Email/Password & Google OAuth) - *requires Supabase*
+- ✅ Demo mode - works without Convex or Stripe setup
+- ✅ User authentication (Email/Password via Convex Auth) - *requires Convex*
 - ✅ Credit-based system (Stripe integration disabled for now - use "Add Test Credits" button)
 - ✅ Image upload and video generation
 - ✅ Real-time generation status updates
@@ -118,44 +108,41 @@ Visit http://localhost:3000
 - ✅ Test credits button for development/testing
 - ✅ localStorage-based demo mode for quick testing
 
-## Database Schema
+## Database Schema (Convex)
 
 ### `profiles`
-- `id` (UUID)
-- `user_id` (UUID, references auth.users)
-- `credits` (INTEGER)
-- `stripe_customer_id` (TEXT)
-- `created_at`, `updated_at` (TIMESTAMP)
+- `userId` (references users)
+- `credits` (number)
+- `stripeCustomerId` (optional string)
+- `_creationTime` (Convex managed)
 
 ### `generations`
-- `id` (UUID)
-- `user_id` (UUID, references auth.users)
-- `prompt` (TEXT, nullable)
-- `input_image_url` (TEXT)
-- `output_video_url` (TEXT, nullable)
-- `status` (TEXT: 'pending' | 'completed' | 'failed')
-- `wavespeed_id` (TEXT, nullable)
-- `error_message` (TEXT, nullable)
-- `created_at`, `updated_at` (TIMESTAMP)
+- `userId` (references users)
+- `prompt` (optional string)
+- `inputImageUrl` (string)
+- `outputVideoUrl` (optional string)
+- `status` ('pending' | 'completed' | 'failed')
+- `wavespeedId` (optional string)
+- `errorMessage` (optional string)
+- `_creationTime` (Convex managed)
 
 ## API Routes
 
-### `/api/webhooks/stripe`
-Handles Stripe checkout completion and adds credits to user profiles.
+### Next.js
+- **`/api/webhooks/stripe`** – Placeholder; when enabled, use Convex HTTP `/stripe` instead.
 
-### `/api/webhooks/wavespeed`
-Receives video generation completion callbacks from WaveSpeedAI and updates generation records.
+### Convex HTTP (when Convex is configured)
+- **POST `/wavespeed`** – Receives video generation callbacks from WaveSpeedAI and updates generation records.
+- **POST `/stripe`** – Stub; implement for Stripe checkout completion and adding credits.
 
 ## Server Actions
 
 ### `generateVideo(imageUrl: string, prompt?: string)`
-- Checks user credits
+- Checks user credits (Convex or demo)
 - Deducts 1 credit
-- Creates generation record
+- Creates generation record (Convex or demo)
 - Calls WaveSpeedAI API
 - Handles errors and refunds credits if needed
 
 ### `createCheckoutSession()`
-- Creates or retrieves Stripe customer
-- Creates Stripe checkout session
-- Returns checkout URL
+- Disabled; when re-enabled, use Convex mutation/action and Convex HTTP `/stripe` webhook.
