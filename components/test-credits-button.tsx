@@ -4,8 +4,8 @@ import { useState } from 'react'
 import { useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import { Sparkles, Loader2 } from 'lucide-react'
-import { isConvexConfigured } from '@/lib/convex'
 import { addDemoCredits } from '@/lib/demo-mode'
+import { isConvexConfigured } from '@/lib/convex'
 
 export function TestCreditsButton() {
   const [loading, setLoading] = useState(false)
